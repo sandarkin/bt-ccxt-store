@@ -90,7 +90,12 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
     def start(self, ):
         DataBase.start(self)
 
-        if self.p.fromdate:
+        if self.p.fromdate and self.p.todate:
+            self._state = self._ST_HISTORBACK
+            self.put_notification(self.DELAYED)
+            self._fetch_ohlcv(self.p.fromdate, self.p.todate)
+
+        elif self.p.fromdate:
             self._state = self._ST_HISTORBACK
             self.put_notification(self.DELAYED)
             self._fetch_ohlcv(self.p.fromdate)
@@ -130,7 +135,7 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                         self.put_notification(self.LIVE)
                         continue
 
-    def _fetch_ohlcv(self, fromdate=None):
+    def _fetch_ohlcv(self, fromdate=None, todate=None):
         """Fetch OHLCV data into self._data queue"""
         granularity = self.store.get_granularity(self._timeframe, self._compression)
 
@@ -141,6 +146,11 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                 since = self._last_ts
             else:
                 since = None
+
+        if todate:
+            hence = int((todate - datetime(1970, 1, 1)).total_seconds() * 1000)
+        else:
+            hence = None
 
         limit = self.p.ohlcv_limit
 
@@ -166,9 +176,19 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                     print('Index Error: Data = {}'.format(data))
                 print('---- REQUEST END ----')
             else:
-
-                data = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
-                                                     since=since, limit=limit, params=self.p.fetch_ohlcv_params))
+                if hence:
+                    if self._name + '_' + str(self._compression) + '_' + str(since) + '_' + str(hence) in self.store.prefetched:
+                        data = self.store.prefetched[self._name + '_' + str(self._compression) + '_' + str(since) + '_' + str(hence)]
+                    else:
+                        data = []
+                        while not data or data[-1][0] < hence:
+                            actual_since = since if not data else data[-1][0] + 1000
+                            data_part = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
+                                                                      since=actual_since, limit=limit, params=self.p.fetch_ohlcv_params))
+                            data = sorted(data + data_part)
+                else:
+                    data = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity,
+                                                         since=since, limit=limit, params=self.p.fetch_ohlcv_params))
 
             # Check to see if dropping the latest candle will help with
             # exchanges which return partial data
